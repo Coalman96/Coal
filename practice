@@ -1,0 +1,116 @@
+import os
+import sys
+import time
+import random
+import requests    # 설치필요
+import PyQt5
+import sqlite3
+import warnings
+import openpyxl
+from openpyxl import workbook
+from bs4 import BeautifulSoup
+from pykiwoom.kiwoom import *   # 설치필요
+from selenium import webdriver    # 설치필요
+
+class KiwoomPy():
+    def __init__(self) -> object:
+        super().__init__()
+
+        # 전역 변수 선언
+        self.DBPath = 'quantDB.db'   # Db 파일위치
+        self.nowDateTime = datetime.datetime.now().strftime('%Y%m%d_%H%M') #'20200924'
+
+        select_com = input('1:포트폴리오 구성, 2:리밸런싱. 실행번호는?')
+        if select_com == '1':
+            sendText = "포트폴리오를 구성합니다."
+            print(sendText)
+            self.getCodeList  # 종목 리스트 획득
+
+        elif select_com == '2':
+            sendText = "리밸런싱을 합니다."
+            print(sendText)
+
+        else:
+            sendText = "잘못 입력했습니다. 다시 입력하세요."
+            print(sendText)
+
+    @property
+    def getCodeList(self):
+        connect = sqlite3.connect(self.DBPath, isolation_level=None)
+        sqlite3.Connection
+        connect.close()
+        print("파일 다운로드:", end='')
+        dataFolder = "C:\\Users\\mayua\\PycharmProjects\\QuantInvest\\down"
+        filelist = os.listdir(dataFolder) #파일 다운로드전에 모든 파일 삭제
+        for filename in filelist:
+            filePath = dataFolder + "\\" + filename
+            if os.path.isfile(filePath):
+                os.remove(filePath)
+        options = webdriver.ChromeOptions()
+        # options.add_argument('headless') # 화면 숨기면 다운안될 가능성있음
+        # options.add_argument('window-size=1920x1080')
+        # options.add_argument("disable-gpu")
+
+        options.add_experimental_option("prefs", {
+            "download.default_directory": dataFolder,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True,
+            "plugins.always_open_pdf_externally": True
+        })
+
+        path = "chromedriver.exe"
+        driver = webdriver.Chrome(path, options=options)
+        driver.get("http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101")
+        time.sleep(3) # 창이 모두 열릴 때 까지 3초기다립니다.
+        driver.find_element_by_xpath('//*[@id="MDCSTAT015_FORM"]/div[2]/div/p[2]/button[2]/img').click()
+        time.sleep(3) # 다운로드가 될 때 까지 3초 기다립니다.
+        driver.find_element_by_xpath('//*[@id="ui-id-1"]/div/div[1]/a').click()
+        time.sleep(3) # 다운로드가 될 때 까지 3초 기다립니다.
+
+        filelist = os.listdir(dataFolder)
+        while len(filelist) == 0: # 5초 이후에도 다운로드가 안되면 5초 더 기다림
+            print(".", end='')
+            time.sleep(5)
+            filelist = os.listdir(dataFolder)
+        filelist.sort(reverse=True) # 파일이 여러개일 경우 가장 큰 하나만 불러옴
+        filePath = dataFolder + '\\' + filelist[0]
+        driver.quit() # 크롬 드라이버를 닫는다.
+        print("완료")
+        print("파일명 : %s" % filelist[0])
+
+        print("파일 업로드:", end='')
+        def changeCode(code):
+            code = str(code)
+            code = '0' * (6 - len(code)) + code
+            return code
+
+        temp_df = pd.read_excel(filePath)
+        info_df = temp_df[['종목코드', '종목명', '시가총액', '거래량', '시장구분']].copy()
+        info_df['종목코드'] = info_df['종목코드'].apply(changeCode)
+
+        # 조건을 충족하지 않는 데이터를 필터링하여 새로운 변수에 저장합니다.
+        noPrice = info_df['거래량'] == 0
+        info_df = info_df[~noPrice] # ~ : 틸데라고 하며 반대조건, 지금은 거래량에 데이터가 0인 경우 제외됨
+        konex = info_df['시장구분'] == "KONEX"
+        info_df = info_df[~konex] # ~ : 틸데라고하며 반대조건, KONEX 제외(개인은 거래가 제한, 3천만원 예수금 필요함)
+        info_df = info_df.sort_values(by=['시가총액'])
+        info_df.reset_index(drop=True, inplace=True) # 정렬로 인덱스 변경에 따른 인덱스 재설정
+
+        cnt = len(info_df) * 0.2 # 시가총액 하위 20%만 선택
+        info_df = info_df.loc[:cnt]
+        print("StockList 테이블에 종목 Insert:", end='')
+
+        connet = sqlite3.connect(self.DBPath, isolation_level=None)
+        sqlite3.Connection
+        cursor = connect.cursor()
+
+        info_df.to_sql('TempStockList', connect, if_exists='replace')# 종목전체 Update는 시간이 많이 걸림
+
+        sql = "INSERT INTO StockList (code, Name, Price, MarketCap, Date) SELECT 종목코드, 종목명, 종가, 시가총액, '%s' FROM TempStockLIST;" % (self.nowDateTime)
+        cursor.execute(sql)
+        connect.close()
+        print("완료")
+
+if __name__== "__main__":
+    kiwoom = KiwoomPy()
